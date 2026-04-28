@@ -1517,29 +1517,33 @@ func getSlotPagePtcVotes(pageData *models.SlotPageBlockData, blockData *services
 			Validators:        make([]types.NamedValidator, 0),
 		}
 
-		// Count votes from aggregation bits and map to unique validators
-		bitCount := uint64(len(pa.AggregationBits)) * 8
-		if bitCount > ptcSize {
-			bitCount = ptcSize
-		}
+		// Count votes from raw aggregation bits, then enrich with validator
+		// names when PTC duties are available. Vote count must not depend on
+		// duty availability — duties may be missing for pruned/unloaded epochs.
+		bitCount := min(uint64(len(pa.AggregationBits))*8, ptcSize)
 		aggValidatorSet := make(map[uint64]bool)
+		bitVoteCount := uint64(0)
 		for i := uint64(0); i < bitCount; i++ {
-			if (pa.AggregationBits[i/8]>>(i%8))&1 == 1 {
-				votedPositions[i] = true
-				if int(i) < len(ptcDuties) {
-					vidx := uint64(ptcDuties[i])
-					if !aggValidatorSet[vidx] {
-						aggValidatorSet[vidx] = true
-						aggregate.Validators = append(aggregate.Validators, types.NamedValidator{
-							Index: vidx,
-							Name:  services.GlobalBeaconService.GetValidatorName(vidx),
-						})
-					}
-				}
+			if (pa.AggregationBits[i/8]>>(i%8))&1 != 1 {
+				continue
 			}
+			votedPositions[i] = true
+			bitVoteCount++
+			if int(i) >= len(ptcDuties) {
+				continue
+			}
+			vidx := uint64(ptcDuties[i])
+			if aggValidatorSet[vidx] {
+				continue
+			}
+			aggValidatorSet[vidx] = true
+			aggregate.Validators = append(aggregate.Validators, types.NamedValidator{
+				Index: vidx,
+				Name:  services.GlobalBeaconService.GetValidatorName(vidx),
+			})
 		}
 
-		aggregate.VoteCount = uint64(len(aggregate.Validators))
+		aggregate.VoteCount = bitVoteCount
 		totalVotes += aggregate.VoteCount
 
 		ptcVotes.Aggregates = append(ptcVotes.Aggregates, aggregate)
